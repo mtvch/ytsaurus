@@ -661,7 +661,20 @@ private:
                 currentRowIndex,
                 readerRows.size());
 
+            auto pivotKey = tabletSnapshot->PivotKey.Get();
+            auto nextPivotKey = tabletSnapshot->NextPivotKey.Get();
+            int keyColumnCount = tabletSnapshot->PhysicalSchema->GetKeyColumnCount();
             for (auto row : readerRows) {
+                // Skip rows outside of tablet range (needed after resharding)
+                if (TableSchema_->IsSorted() &&
+                    (CompareRows(row, pivotKey, keyColumnCount) < 0 ||
+                     (nextPivotKey.GetCount() > 0 &&
+                        CompareRows(row, nextPivotKey, keyColumnCount) >= 0)))
+                {
+                    ++currentRowIndex;
+                    continue;
+                }
+
                 TTypeErasedRow replicationRow;
                 ERowModificationType modificationType;
                 i64 rowIndex;
@@ -742,7 +755,7 @@ private:
 
         YT_VERIFY(result != EReaderTerminationReason::None);
 
-        *newReplicationRowIndex = startRowIndex + rowCount;
+        *newReplicationRowIndex = currentRowIndex;
         *newReplicationTimestamp = prevTimestamp;
         *batchRowCount = rowCount;
         *batchDataWeight = dataWeight;

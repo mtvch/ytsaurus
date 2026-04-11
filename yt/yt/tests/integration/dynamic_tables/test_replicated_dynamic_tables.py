@@ -2850,7 +2850,7 @@ class TestReplicatedDynamicTables(TestReplicatedDynamicTablesBase):
         assert async_replica["replica_id"] == replica_id1
         assert async_replica["current_replication_row_index"] <= 3
 
-    @authors("ifsmirnov")
+    @authors("ifsmirnov", "mkarpov")
     def test_reshard_non_empty_replicated_table(self):
         self._create_cells()
         self._create_replicated_table("//tmp/t", schema=self.SIMPLE_SCHEMA_SORTED, min_replication_log_ttl=0)
@@ -2884,15 +2884,91 @@ class TestReplicatedDynamicTables(TestReplicatedDynamicTablesBase):
 
         sync_flush_table("//tmp/t")
 
-        # Remove one replica to advance replicated trimmed row count.
-        remove("#{}".format(replica_id1))
-        # 2 dynamic stores.
-        wait(lambda: get("//tmp/t/@chunk_count") == 0 + 2)
-        assert get_tablet_infos("//tmp/t", [0])["tablets"][0]["trimmed_row_count"] == 1
+        before_replication_row_index = get("#{0}/@tablets/0/committed_replication_row_index".format(replica_id2))
+        before_replication_timestamp = get("#{0}/@tablets/0/current_replication_timestamp".format(replica_id2))
+        before_trimmed_row_count = get_tablet_infos("//tmp/t", [0])["tablets"][0]["trimmed_row_count"]
+        before_chunk_count = get("//tmp/t/@tablets/0/statistics/chunk_count")
+        assert before_chunk_count > 0
 
         sync_unmount_table("//tmp/t")
-        with pytest.raises(YtError):
-            reshard_table("//tmp/t", [[]])
+
+        reshard_table("//tmp/t", [[]])
+
+        reshard_table("//tmp/t", [[], [50]])
+        tablets = get("//tmp/t/@tablets")
+        assert len(tablets) == 2
+        assert tablets[0]["pivot_key"] == []
+        assert tablets[1]["pivot_key"] == [50]
+
+        reshard_table("//tmp/t", [[], [25], [50], [75]])
+        tablets = get("//tmp/t/@tablets")
+        assert len(tablets) == 4
+        assert tablets[0]["pivot_key"] == []
+        assert tablets[1]["pivot_key"] == [25]
+        assert tablets[2]["pivot_key"] == [50]
+        assert tablets[3]["pivot_key"] == [75]
+
+        with pytest.raises(YtError, match="Cannot merge tablets of a sorted replicated table"):
+            reshard_table("//tmp/t", [[], [33], [67]])
+
+        sync_mount_table("//tmp/t")
+
+        for i in range(4):
+            assert get("//tmp/t/@tablets/{}/statistics/chunk_count".format(i)) == before_chunk_count
+            assert get("//tmp/t/@tablets/{}/trimmed_row_count".format(i)) == before_trimmed_row_count
+            assert get("#{0}/@tablets/{1}/committed_replication_row_index".format(replica_id2, i)) == before_replication_row_index
+            assert get("#{0}/@tablets/{1}/current_replication_timestamp".format(replica_id2, i)) == before_replication_timestamp
+
+        # Verify replication works after reshard: insert rows into different tablets and check replicas.
+        new_rows = [
+            {"key": 10, "value1": "a", "value2": 1},
+            {"key": 30, "value1": "b", "value2": 2},
+            {"key": 60, "value1": "c", "value2": 3},
+            {"key": 80, "value1": "d", "value2": 4},
+        ]
+        insert_rows("//tmp/t", new_rows)
+        all_rows = sorted(rows + new_rows, key=lambda r: r["key"])
+        wait(lambda: lookup_rows(
+            "//tmp/r1",
+            [{"key": r["key"]} for r in all_rows],
+            driver=self.replica_driver,
+        ) == all_rows)
+
+        # Partial-range reshard: split only the middle tablet [50, 75) into [50, 60) and [60, 75).
+        sync_flush_table("//tmp/t")
+        mid_row_index = get("#{0}/@tablets/2/committed_replication_row_index".format(replica_id2))
+        mid_timestamp = get("#{0}/@tablets/2/current_replication_timestamp".format(replica_id2))
+        mid_chunk_count = get("//tmp/t/@tablets/2/statistics/chunk_count")
+        assert mid_chunk_count > 0
+
+        sync_unmount_table("//tmp/t")
+        reshard_table("//tmp/t", [[50], [60]], first_tablet_index=2, last_tablet_index=2)
+        tablets = get("//tmp/t/@tablets")
+        assert len(tablets) == 5
+        assert tablets[0]["pivot_key"] == []
+        assert tablets[1]["pivot_key"] == [25]
+        assert tablets[2]["pivot_key"] == [50]
+        assert tablets[3]["pivot_key"] == [60]
+        assert tablets[4]["pivot_key"] == [75]
+
+        sync_mount_table("//tmp/t")
+        for i in [2, 3]:
+            assert get("//tmp/t/@tablets/{}/statistics/chunk_count".format(i)) == mid_chunk_count
+            assert get("#{0}/@tablets/{1}/committed_replication_row_index".format(replica_id2, i)) == mid_row_index
+            assert get("#{0}/@tablets/{1}/current_replication_timestamp".format(replica_id2, i)) == mid_timestamp
+
+        # Insert into the newly split tablets and verify replication.
+        partial_rows = [
+            {"key": 55, "value1": "e", "value2": 5},
+            {"key": 65, "value1": "f", "value2": 6},
+        ]
+        insert_rows("//tmp/t", partial_rows)
+        all_rows = sorted(all_rows + partial_rows, key=lambda r: r["key"])
+        wait(lambda: lookup_rows(
+            "//tmp/r1",
+            [{"key": r["key"]} for r in all_rows],
+            driver=self.replica_driver,
+        ) == all_rows)
 
     @authors("akozhikhov")
     @pytest.mark.parametrize("remove_list", [True, False])
