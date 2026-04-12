@@ -551,41 +551,44 @@ public:
                 }
             }
 
-            for (int relativeNewTabletIndex = 0; relativeNewTabletIndex < newTabletCount; ++relativeNewTabletIndex) {
-                auto* newTablet = newTablets[relativeNewTabletIndex]->As<TTablet>();
-                auto lowerPivot = newTablet->GetPivotKeyBound();
-                auto upperPivot = GetTabletUpperPivotKeyBound(newTablet, tablets);
+            int relativeNewTabletIndex = 0;
+            for (int relativeOldTabletIndex = 0; relativeOldTabletIndex < oldTabletCount; ++relativeOldTabletIndex) {
+                int oldTabletIndex = firstTabletIndex + relativeOldTabletIndex;
 
-                auto [beginOldTabletIndex, endOldTabletIndex] = GetIntersectingTablets(
-                    TRange(oldPivotKeyBounds.begin(), std::prev(oldPivotKeyBounds.end())),
-                    TReadRange{
-                        NChunkClient::TReadLimit(lowerPivot),
-                        NChunkClient::TReadLimit(upperPivot.Invert())
-                    },
-                    comparator);
+                while (relativeNewTabletIndex < std::ssize(newTablets)) {
+                    auto* newTablet = newTablets[relativeNewTabletIndex]->As<TTablet>();
 
-                YT_VERIFY(beginOldTabletIndex == endOldTabletIndex - 1);
+                    if (relativeOldTabletIndex + 1 < oldTabletCount &&
+                        comparator.CompareKeyBounds(
+                            newTablet->GetPivotKeyBound(),
+                            oldPivotKeyBounds[relativeOldTabletIndex + 1]) >= 0)
+                    {
+                        break;
+                    }
 
-                int oldTabletIndex = firstTabletIndex + beginOldTabletIndex;
+                    // Only split resharding is supported
+                    YT_VERIFY(comparator.CompareKeyBounds(
+                        GetTabletUpperPivotKeyBound(newTablet, tablets),
+                        oldPivotKeyBounds[relativeOldTabletIndex + 1]) <= 0);
 
-                auto* oldMainChunkList = oldRootChunkLists[EChunkListContentType::Main]
-                    ->Children()[oldTabletIndex]->AsChunkList();
+                    auto* oldMainChunkList = oldRootChunkLists[EChunkListContentType::Main]
+                        ->Children()[oldTabletIndex]->AsChunkList();
+                    newTabletChunkLists[EChunkListContentType::Main].push_back(
+                        chunkManager->CloneTabletChunkList(oldMainChunkList));
 
-                newTabletChunkLists[EChunkListContentType::Main].push_back(
-                    chunkManager->CloneTabletChunkList(oldMainChunkList));
+                    auto* oldHunkChunkList = oldRootChunkLists[EChunkListContentType::Hunk]
+                        ->Children()[oldTabletIndex]->AsChunkList();
+                    newTabletChunkLists[EChunkListContentType::Hunk].push_back(
+                        chunkManager->CloneTabletChunkList(oldHunkChunkList));
 
-                auto* oldHunkChunkList = oldRootChunkLists[EChunkListContentType::Hunk]
-                    ->Children()[oldTabletIndex]->AsChunkList();
+                    auto& originatorTablets = newTablet->OriginatorTablets();
+                    originatorTablets.emplace_back(
+                        oldTabletIds[relativeOldTabletIndex],
+                        oldTabletSizes[relativeOldTabletIndex],
+                        oldTabletSizes[relativeOldTabletIndex]);
 
-                newTabletChunkLists[EChunkListContentType::Hunk].push_back(
-                    chunkManager->CloneTabletChunkList(oldHunkChunkList));
-
-                auto& originatorTablets = newTablet->OriginatorTablets();
-                originatorTablets.reserve(1);
-                originatorTablets.emplace_back(
-                        oldTabletIds[beginOldTabletIndex],
-                        oldTabletSizes[beginOldTabletIndex],
-                        oldTabletSizes[beginOldTabletIndex]);
+                    ++relativeNewTabletIndex;
+                }
             }
         } else {
             auto cloneTabletChunkList = [&] (EChunkListContentType contentType, int tabletIndex) {
