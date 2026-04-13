@@ -701,7 +701,7 @@ void TTableNode::ValidateReshard(
         return;
     }
 
-    if (IsPhysicallyLog() && !IsLogicallyEmpty()) {
+    if (IsPhysicallyLog() && !IsLogicallyEmpty() && !IsSorted()) {
         THROW_ERROR_EXCEPTION("Cannot reshard non-empty table of type %Qlv",
             GetType());
     }
@@ -731,6 +731,22 @@ void TTableNode::ValidateReshard(
                     THROW_ERROR_EXCEPTION(
                         "Last pivot key must be strictly less than that of the tablet "
                         "which follows the resharded range");
+                }
+            }
+            if (IsPhysicallyLog()) {
+                int newPivotIdx = 0;
+                for (int oldIdx = firstTabletIndex; oldIdx <= lastTabletIndex; ++oldIdx) {
+                    const auto& oldPivotKey = tablets[oldIdx]->As<TTablet>()->GetPivotKey();
+                    while (newPivotIdx < std::ssize(pivotKeys) && pivotKeys[newPivotIdx] < oldPivotKey) {
+                        ++newPivotIdx;
+                    }
+                    if (newPivotIdx >= std::ssize(pivotKeys) || pivotKeys[newPivotIdx] != oldPivotKey) {
+                        THROW_ERROR_EXCEPTION(
+                            "Cannot merge tablets of a sorted replicated table; "
+                            "pivot key %v of tablet %v must be present in new pivot keys",
+                            oldPivotKey,
+                            oldIdx);
+                    }
                 }
             }
         }

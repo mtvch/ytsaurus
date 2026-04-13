@@ -661,7 +661,26 @@ private:
                 currentRowIndex,
                 readerRows.size());
 
+            auto pivotKey = tabletSnapshot->PivotKey.Get();
+            auto nextPivotKey = tabletSnapshot->NextPivotKey.Get();
+            int keyColumnCount = TableSchema_->GetKeyColumnCount();
+            auto compareLogRowKeys = [&] (TUnversionedRow logRow, TUnversionedRow pivot) {
+                return CompareValueRanges(
+                    GetSortedLogRowUserKeys(logRow, keyColumnCount),
+                    pivot.Elements());
+            };
             for (auto row : readerRows) {
+                // Skip rows outside of the tablet's key range: after a split reshard
+                // every new tablet inherits a clone of the originator's log chunks,
+                // so each tablet's log may contain rows whose keys belong to sibling tablets.
+                if (TableSchema_->IsSorted() &&
+                    (compareLogRowKeys(row, pivotKey) < 0 ||
+                     (nextPivotKey.GetCount() > 0 && compareLogRowKeys(row, nextPivotKey) >= 0)))
+                {
+                    ++currentRowIndex;
+                    continue;
+                }
+
                 TTypeErasedRow replicationRow;
                 ERowModificationType modificationType;
                 i64 rowIndex;
@@ -742,7 +761,7 @@ private:
 
         YT_VERIFY(result != EReaderTerminationReason::None);
 
-        *newReplicationRowIndex = startRowIndex + rowCount;
+        *newReplicationRowIndex = currentRowIndex;
         *newReplicationTimestamp = prevTimestamp;
         *batchRowCount = rowCount;
         *batchDataWeight = dataWeight;

@@ -15,6 +15,12 @@ namespace NYT::NTabletNode {
 
 i64 GetLogRowIndex(NTableClient::TUnversionedRow logRow);
 
+// Sorted table only. Returns the user key columns slice from a log row.
+// Sorted log row layout: [$tablet_index, $row_index, $timestamp, change_type, key_0..key_{K-1}, ...]
+NTableClient::TUnversionedValueRange GetSortedLogRowUserKeys(
+    NTableClient::TUnversionedRow logRow,
+    int keyColumnCount);
+
 TLegacyOwningKey MakeRowBound(i64 rowIndex, i64 tabletIndex = -1);
 
 TUnversionedRow BuildLogRow(
