@@ -111,6 +111,18 @@ func disableIndexControlAttributes() OperationOption {
 	return &disableIndexControlAttributesOption{}
 }
 
+// WithoutIndexControlAttributes turns off row and range indexes for the operation:
+// the Skiff input format omits $row_index and $range_index, and the job I/O
+// control attributes of the spec disable enable_row_index and enable_range_index.
+// Table index and key switch stay as they are.
+//
+// Readers of sorted dynamic tables do not return row indexes, so a map or reduce
+// over such tables fails with "Row index requested but reader did not return it"
+// unless the indexes are off.
+func WithoutIndexControlAttributes() OperationOption {
+	return disableIndexControlAttributes()
+}
+
 type disableGetInputTablesSchemaOption struct{}
 
 func (o *disableGetInputTablesSchemaOption) isOperationOption() {}

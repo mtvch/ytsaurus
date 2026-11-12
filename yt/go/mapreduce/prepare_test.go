@@ -366,3 +366,20 @@ func TestAbortFileTransactionCancelsContext(t *testing.T) {
 		t.Fatal("abort did not cancel the transaction context")
 	}
 }
+
+func TestDisableRowAndRangeIndexes(t *testing.T) {
+	s := spec.Reduce()
+	s.MapJobIO = &spec.JobIO{}
+	disableRowAndRangeIndexes(s)
+
+	attributes := s.JobIO.ControlAttributes
+	require.False(t, attributes.EnableRowIndex)
+	require.False(t, attributes.EnableRangeIndex)
+	require.True(t, attributes.EnableTableIndex)
+	require.True(t, attributes.EnableKeySwitch)
+	require.Nil(t, s.MapJobIO.ControlAttributes)
+}
+
+func TestWithoutIndexControlAttributesIsHandled(t *testing.T) {
+	require.IsType(t, &disableIndexControlAttributesOption{}, WithoutIndexControlAttributes())
+}

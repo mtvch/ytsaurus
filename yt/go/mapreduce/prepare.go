@@ -317,6 +317,17 @@ func isSelfUploadOperationType(operationType yt.OperationType) bool {
 	return true
 }
 
+// disableRowAndRangeIndexes turns off row and range indexes in every job I/O of the spec.
+func disableRowAndRangeIndexes(s *spec.Spec) {
+	for _, jobIO := range []*spec.JobIO{s.JobIO, s.MapJobIO, s.ReduceJobIO} {
+		if jobIO == nil || jobIO.ControlAttributes == nil {
+			continue
+		}
+		jobIO.ControlAttributes.EnableRowIndex = false
+		jobIO.ControlAttributes.EnableRangeIndex = false
+	}
+}
+
 func (p *prepare) prepare(opts []OperationOption) error {
 	skipSelfUpload := !isSelfUploadOperationType(p.spec.Type)
 	for _, opt := range opts {
@@ -328,7 +339,8 @@ func (p *prepare) prepare(opts []OperationOption) error {
 		case *startOperationOptsOption:
 			// This option is handled in start.
 		case *disableIndexControlAttributesOption:
-			// This option is handled in addJobCommand.
+			// The input format is handled in addJobCommand.
+			disableRowAndRangeIndexes(p.spec)
 		default:
 			panic(fmt.Sprintf("unsupported option type %T", opt))
 		}
