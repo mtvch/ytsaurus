@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -126,6 +127,7 @@ func (p *prepare) uploadJobState(userScript *spec.UserScript, state *jobState) p
 func (p *prepare) addJobCommand(
 	job any,
 	userScript **spec.UserScript,
+	controlAttributes *spec.ControlAttributes,
 	state *jobState,
 	outputTableCount int,
 	opts []OperationOption,
@@ -135,7 +137,7 @@ func (p *prepare) addJobCommand(
 	}
 	(*userScript).Command = jobCommand(job, outputTableCount)
 	p.setGoMaxProc(*userScript)
-	if err := p.setupInputOutputFormat(job, userScript, state, opts); err != nil {
+	if err := p.setupInputOutputFormat(job, userScript, controlAttributes, state, opts); err != nil {
 		return err
 	}
 
@@ -144,14 +146,20 @@ func (p *prepare) addJobCommand(
 	return nil
 }
 
-func (p *prepare) setupInputOutputFormat(job any, userScript **spec.UserScript, state *jobState, opts []OperationOption) error {
+func (p *prepare) setupInputOutputFormat(
+	job any,
+	userScript **spec.UserScript,
+	controlAttributes *spec.ControlAttributes,
+	state *jobState,
+	opts []OperationOption,
+) error {
 	typedJob, ok := job.(Job)
 	if !ok {
 		return nil
 	}
 
 	if containsSkiffSchemas(typedJob.InputTypes()) {
-		if err := p.setupSkiffInputFormat(typedJob, userScript, state, opts); err != nil {
+		if err := p.setupSkiffInputFormat(typedJob, userScript, controlAttributes, state, opts); err != nil {
 			return xerrors.Errorf("failed to setup skiff input format: %w", err)
 		}
 	}
@@ -165,25 +173,46 @@ func (p *prepare) setupInputOutputFormat(job any, userScript **spec.UserScript, 
 	return nil
 }
 
-func (p *prepare) setupSkiffInputFormat(job Job, userScript **spec.UserScript, state *jobState, opts []OperationOption) error {
-	enableIndexControlAttributes := true
+func jobIOControlAttributes(jobIO *spec.JobIO) *spec.ControlAttributes {
+	if jobIO == nil {
+		return nil
+	}
+	return jobIO.ControlAttributes
+}
+
+func skiffInputSystemColumns(controlAttributes *spec.ControlAttributes) []skiff.Schema {
+	systemColumns := []skiff.Schema{{Type: skiff.TypeBoolean, Name: "$key_switch"}}
+	if controlAttributes == nil {
+		return systemColumns
+	}
+	if controlAttributes.EnableRowIndex {
+		systemColumns = append(systemColumns,
+			skiff.Schema{Type: skiff.TypeVariant8, Name: "$row_index", Children: []skiff.Schema{{Type: skiff.TypeNothing}, {Type: skiff.TypeInt64}}},
+		)
+	}
+	if controlAttributes.EnableRangeIndex {
+		systemColumns = append(systemColumns,
+			skiff.Schema{Type: skiff.TypeVariant8, Name: "$range_index", Children: []skiff.Schema{{Type: skiff.TypeNothing}, {Type: skiff.TypeInt64}}},
+		)
+	}
+	return systemColumns
+}
+
+func (p *prepare) setupSkiffInputFormat(
+	job Job,
+	userScript **spec.UserScript,
+	controlAttributes *spec.ControlAttributes,
+	state *jobState,
+	opts []OperationOption,
+) error {
 	shouldGetInputTablesSchema := true
 	for _, opt := range opts {
-		switch opt.(type) {
-		case *disableIndexControlAttributesOption:
-			enableIndexControlAttributes = false
-		case *disableGetInputTablesSchemaOption:
+		if _, ok := opt.(*disableGetInputTablesSchemaOption); ok {
 			shouldGetInputTablesSchema = false
 		}
 	}
 
-	systemColumns := []skiff.Schema{{Type: skiff.TypeBoolean, Name: "$key_switch"}}
-	if enableIndexControlAttributes {
-		systemColumns = append(systemColumns,
-			skiff.Schema{Type: skiff.TypeVariant8, Name: "$row_index", Children: []skiff.Schema{{Type: skiff.TypeNothing}, {Type: skiff.TypeInt64}}},
-			skiff.Schema{Type: skiff.TypeVariant8, Name: "$range_index", Children: []skiff.Schema{{Type: skiff.TypeNothing}, {Type: skiff.TypeInt64}}},
-		)
-	}
+	systemColumns := skiffInputSystemColumns(controlAttributes)
 	inputTypes := job.InputTypes()
 	skiffSchemas := make([]skiff.Schema, len(inputTypes))
 	for i, inputType := range inputTypes {
@@ -194,7 +223,7 @@ func (p *prepare) setupSkiffInputFormat(job Job, userScript **spec.UserScript, s
 		skiffSchemas[i] = skiff.Schema{
 			Type:     skiffSchema.Type,
 			Name:     skiffSchema.Name,
-			Children: append(systemColumns, skiffSchema.Children...),
+			Children: slices.Concat(systemColumns, skiffSchema.Children),
 		}
 	}
 
@@ -327,8 +356,6 @@ func (p *prepare) prepare(opts []OperationOption) error {
 			skipSelfUpload = true
 		case *startOperationOptsOption:
 			// This option is handled in start.
-		case *disableIndexControlAttributesOption:
-			// This option is handled in addJobCommand.
 		default:
 			panic(fmt.Sprintf("unsupported option type %T", opt))
 		}

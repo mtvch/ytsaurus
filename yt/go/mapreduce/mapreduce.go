@@ -44,7 +44,7 @@ func (mr *client) prepare(spec *spec.Spec) *prepare {
 func (mr *client) Map(mapper Job, s *spec.Spec, opts ...OperationOption) (Operation, error) {
 	p := mr.prepare(s)
 	p.mapperState = new(jobState)
-	if err := p.addJobCommand(mapper, &p.spec.Mapper, p.mapperState, len(p.spec.OutputTablePaths), opts); err != nil {
+	if err := p.addJobCommand(mapper, &p.spec.Mapper, jobIOControlAttributes(p.spec.JobIO), p.mapperState, len(p.spec.OutputTablePaths), opts); err != nil {
 		return nil, err
 	}
 	return p.start(opts)
@@ -53,7 +53,7 @@ func (mr *client) Map(mapper Job, s *spec.Spec, opts ...OperationOption) (Operat
 func (mr *client) RawMap(mapper RawJob, s *spec.Spec, opts ...OperationOption) (Operation, error) {
 	p := mr.prepare(s)
 	p.mapperState = new(jobState)
-	if err := p.addJobCommand(mapper, &p.spec.Mapper, p.mapperState, len(p.spec.OutputTablePaths), opts); err != nil {
+	if err := p.addJobCommand(mapper, &p.spec.Mapper, jobIOControlAttributes(p.spec.JobIO), p.mapperState, len(p.spec.OutputTablePaths), opts); err != nil {
 		return nil, err
 	}
 	return p.start(opts)
@@ -62,7 +62,7 @@ func (mr *client) RawMap(mapper RawJob, s *spec.Spec, opts ...OperationOption) (
 func (mr *client) Reduce(reducer Job, s *spec.Spec, opts ...OperationOption) (Operation, error) {
 	p := mr.prepare(s)
 	p.reducerState = new(jobState)
-	if err := p.addJobCommand(reducer, &p.spec.Reducer, p.reducerState, len(p.spec.OutputTablePaths), opts); err != nil {
+	if err := p.addJobCommand(reducer, &p.spec.Reducer, jobIOControlAttributes(p.spec.JobIO), p.reducerState, len(p.spec.OutputTablePaths), opts); err != nil {
 		return nil, err
 	}
 	return p.start(opts)
@@ -71,7 +71,7 @@ func (mr *client) Reduce(reducer Job, s *spec.Spec, opts ...OperationOption) (Op
 func (mr *client) JoinReduce(reducer Job, s *spec.Spec, opts ...OperationOption) (Operation, error) {
 	p := mr.prepare(s)
 	p.reducerState = new(jobState)
-	if err := p.addJobCommand(reducer, &p.spec.Reducer, p.reducerState, len(p.spec.OutputTablePaths), opts); err != nil {
+	if err := p.addJobCommand(reducer, &p.spec.Reducer, jobIOControlAttributes(p.spec.JobIO), p.reducerState, len(p.spec.OutputTablePaths), opts); err != nil {
 		return nil, err
 	}
 	return p.start(opts)
@@ -81,7 +81,7 @@ func (mr *client) MapReduce(mapper, reducer Job, s *spec.Spec, opts ...Operation
 	p := mr.prepare(s)
 	if mapper != nil {
 		p.mapperState = new(jobState)
-		if err := p.addJobCommand(mapper, &p.spec.Mapper, p.mapperState, 1+p.spec.MapperOutputTableCount, opts); err != nil {
+		if err := p.addJobCommand(mapper, &p.spec.Mapper, jobIOControlAttributes(p.spec.MapJobIO), p.mapperState, 1+p.spec.MapperOutputTableCount, opts); err != nil {
 			return nil, err
 		}
 	}
@@ -90,9 +90,10 @@ func (mr *client) MapReduce(mapper, reducer Job, s *spec.Spec, opts ...Operation
 	err := p.addJobCommand(
 		reducer,
 		&p.spec.Reducer,
+		nil,
 		p.reducerState,
 		len(p.spec.OutputTablePaths)-p.spec.MapperOutputTableCount,
-		append(opts, disableIndexControlAttributes(), disableGetInputTablesSchema()), // Reduce phase does not support indexes (table, row and range).
+		append(opts, disableGetInputTablesSchema()),
 	)
 	if err != nil {
 		return nil, err
@@ -104,7 +105,7 @@ func (mr *client) MapCombineReduce(mapper, combiner, reducer Job, s *spec.Spec, 
 	p := mr.prepare(s)
 
 	p.mapperState = new(jobState)
-	if err := p.addJobCommand(mapper, &p.spec.Mapper, p.mapperState, 1+p.spec.MapperOutputTableCount, opts); err != nil {
+	if err := p.addJobCommand(mapper, &p.spec.Mapper, jobIOControlAttributes(p.spec.MapJobIO), p.mapperState, 1+p.spec.MapperOutputTableCount, opts); err != nil {
 		return nil, err
 	}
 
@@ -112,9 +113,10 @@ func (mr *client) MapCombineReduce(mapper, combiner, reducer Job, s *spec.Spec, 
 	err := p.addJobCommand(
 		combiner,
 		&p.spec.ReduceCombiner,
+		nil,
 		p.combinerState,
 		1,
-		append(opts, disableIndexControlAttributes(), disableGetInputTablesSchema()), // Reduce phase does not support indexes (table, row and range).
+		append(opts, disableGetInputTablesSchema()),
 	)
 	if err != nil {
 		return nil, err
@@ -124,9 +126,10 @@ func (mr *client) MapCombineReduce(mapper, combiner, reducer Job, s *spec.Spec, 
 	err = p.addJobCommand(
 		reducer,
 		&p.spec.Reducer,
+		nil,
 		p.reducerState,
 		len(p.spec.OutputTablePaths)-p.spec.MapperOutputTableCount,
-		append(opts, disableIndexControlAttributes(), disableGetInputTablesSchema()), // Reduce phase does not support indexes (table, row and range).
+		append(opts, disableGetInputTablesSchema()),
 	)
 	if err != nil {
 		return nil, err
@@ -163,7 +166,7 @@ func (mr *client) Vanilla(s *spec.Spec, jobs map[string]Job, opts ...OperationOp
 		state := new(jobState)
 		p.tasksState[name] = state
 
-		if err := p.addJobCommand(job, &us, state, len(us.OutputTablePaths), opts); err != nil {
+		if err := p.addJobCommand(job, &us, jobIOControlAttributes(us.JobIO), state, len(us.OutputTablePaths), opts); err != nil {
 			return nil, err
 		}
 	}

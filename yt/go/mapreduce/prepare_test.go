@@ -13,6 +13,7 @@ import (
 
 	"go.ytsaurus.tech/yt/go/guid"
 	"go.ytsaurus.tech/yt/go/mapreduce/spec"
+	"go.ytsaurus.tech/yt/go/skiff"
 	"go.ytsaurus.tech/yt/go/ypath"
 	"go.ytsaurus.tech/yt/go/yt"
 	"go.ytsaurus.tech/yt/go/yterrors"
@@ -365,4 +366,79 @@ func TestAbortFileTransactionCancelsContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("abort did not cancel the transaction context")
 	}
+}
+
+type skiffInputTestJob struct {
+	inputTypes []any
+}
+
+func (j *skiffInputTestJob) Do(ctx JobContext, in Reader, out []Writer) error { return nil }
+func (j *skiffInputTestJob) InputTypes() []any                                { return j.inputTypes }
+func (j *skiffInputTestJob) OutputTypes() []any                               { return nil }
+
+func skiffColumnNames(columns []skiff.Schema) []string {
+	names := make([]string, len(columns))
+	for i, column := range columns {
+		names[i] = column.Name
+	}
+	return names
+}
+
+func TestSkiffInputSystemColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		attributes *spec.ControlAttributes
+		expected   []string
+	}{
+		{
+			name:     "nil attributes",
+			expected: []string{"$key_switch"},
+		},
+		{
+			name:       "all enabled",
+			attributes: spec.Map().JobIO.ControlAttributes,
+			expected:   []string{"$key_switch", "$row_index", "$range_index"},
+		},
+		{
+			name:       "row and range indexes disabled",
+			attributes: &spec.ControlAttributes{EnableTableIndex: true, EnableKeySwitch: true},
+			expected:   []string{"$key_switch"},
+		},
+		{
+			name:       "only row index enabled",
+			attributes: &spec.ControlAttributes{EnableRowIndex: true},
+			expected:   []string{"$key_switch", "$row_index"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, skiffColumnNames(skiffInputSystemColumns(tc.attributes)))
+		})
+	}
+}
+
+func TestSetupSkiffInputFormatPerTableColumns(t *testing.T) {
+	job := &skiffInputTestJob{inputTypes: []any{
+		skiff.Schema{Type: skiff.TypeTuple, Children: []skiff.Schema{{Type: skiff.TypeInt64, Name: "a"}}},
+		skiff.Schema{Type: skiff.TypeTuple, Children: []skiff.Schema{{Type: skiff.TypeInt64, Name: "b"}}},
+	}}
+
+	p := &prepare{}
+	var userScript *spec.UserScript = &spec.UserScript{}
+	state := new(jobState)
+	err := p.setupSkiffInputFormat(
+		job,
+		&userScript,
+		spec.Map().JobIO.ControlAttributes,
+		state,
+		[]OperationOption{disableGetInputTablesSchema()},
+	)
+	require.NoError(t, err)
+
+	require.Len(t, state.InputTablesInfo, 2)
+	require.Equal(t,
+		[]string{"$key_switch", "$row_index", "$range_index", "a"},
+		skiffColumnNames(state.InputTablesInfo[0].SkiffSchema.Children))
+	require.Equal(t,
+		[]string{"$key_switch", "$row_index", "$range_index", "b"},
+		skiffColumnNames(state.InputTablesInfo[1].SkiffSchema.Children))
 }

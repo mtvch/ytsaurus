@@ -101,16 +101,6 @@ func WithStartOperationOptions(options *yt.StartOperationOptions) OperationOptio
 	return &startOperationOptsOption{options: options}
 }
 
-type disableIndexControlAttributesOption struct{}
-
-func (o *disableIndexControlAttributesOption) isOperationOption() {}
-
-// disableIndexControlAttributes disables index system columns ($row_index, $range_index)
-// in Skiff input format.
-func disableIndexControlAttributes() OperationOption {
-	return &disableIndexControlAttributesOption{}
-}
-
 type disableGetInputTablesSchemaOption struct{}
 
 func (o *disableGetInputTablesSchemaOption) isOperationOption() {}
